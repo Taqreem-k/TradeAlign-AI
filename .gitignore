@@ -1,0 +1,61 @@
+# Python-generated files
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# =========================
+# Environment & Secrets (CRITICAL)
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Python & Bytecode
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# =========================
+# Virtual Environments (uv/pip)
+# =========================
+.venv/
+venv/
+env/
+ENV/
+.uv/
+
+# =========================
+# Docker & Database
+# =========================
+postgres_data/
+*.db
+*.sqlite3
+
+# =========================
+# IDEs & OS Files
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =========================
+# Jupyter Notebooks (Since we installed ipykernel)
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Logs & Caches
+# =========================
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
