@@ -1,4 +1,4 @@
-from openai import OpenAI
+from google import genai
 from app.config import settings
 import logging
 
@@ -6,6 +6,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 class BaseAgent:
     def __init__(self):
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.logger = logging.getLogger(self.__class__.__name__)
         

@@ -13,7 +13,7 @@ class SECScraper(BaseScraper):
 
     def run(self):
         self.logger.info("Starting SEC EDGAR Scraper...")
-        response = requests.get(self.rss_url, header=self.headers)
+        response = requests.get(self.rss_url, headers=self.headers)
         feed = feedparser.parse(response.content)
 
         count = 0

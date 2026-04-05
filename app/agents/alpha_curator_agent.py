@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List
 from sqlalchemy.orm import Session
 import os
+from google.genai import types
 from app.agents.base import BaseAgent
 from app.database.models import AlphaDigest
 
@@ -15,9 +16,9 @@ class CuratorOutput(BaseModel):
     ranked_items: List[RankedItem]
 
 class AlphaCuratorAgent(BaseAgent):
-    def __init__(self):
+    def __init__(self, db: Session):
         super().__init__()
-        self.db = self.db
+        self.db = db
 
         profile_path = os.path.join(os.path.dirname(__file__), '..', 'profiles','investor_profile.md')
         with open(profile_path, 'r') as f:
@@ -38,15 +39,18 @@ class AlphaCuratorAgent(BaseAgent):
         
         prompt = f"Profile:\n{self.profile}\n\nDaily Digests:\n{payload}\n\nRank the top{limit} most critical items based ONLY on alignment with Investor Profile."
 
-        response = self.client.beta.chat.completions.parse(
-            model="gpt-40",
-            messages=[
-                {"role": "system", "content": "You are a Chief Investment Officer curating a pre-market brief."},
-                {"role": "user", "content": prompt}
+        response = self.client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                "You are a Chief Investment Officer curating a pre-market brief.",
+                prompt
             ],
-            response_format = CuratorOutput,
-            temperature=0.3
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=CuratorOutput,
+                temperature=0.3
+            ),
         )
 
         self.logger.info("Curation complete.")
-        return response.choices[0].message.parsed
+        return CuratorOutput.model_validate_json(response.text)

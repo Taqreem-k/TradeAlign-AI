@@ -9,6 +9,7 @@ class YahooFinanceScraper(BaseScraper):
     def __init__(self, db):
         super().__init__(db)
         self.rss_url = "https://finance.yahoo.com/news/rssindex"
+        self.h = html2text.HTML2Text()
         self.h.ignore_links = False
 
     def run(self):
