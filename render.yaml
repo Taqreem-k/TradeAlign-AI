@@ -1,25 +1,4 @@
-services:
-  - type: cron
-    name: alpha-radar-cron
-    env: docker
-    schedule: "30 13 * * 1-5" # 13:30 UTC (8:30 AM EST) Mon-Fri
-    plan: free 
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: alpha-radar-db
-          property: connectionString
-      - key: OPENAI_API_KEY
-        sync: false # Keeps the API key hidden from your GitHub repo
-      - key: SENDER_EMAIL
-        sync: false
-      - key: EMAIL_APP_PASSWORD
-        sync: false
-      - key: RECEIVER_EMAIL
-        sync: false
-
 databases:
   - name: alpha-radar-db
     databaseName: alpharadar
-    user: postgres
     plan: free
