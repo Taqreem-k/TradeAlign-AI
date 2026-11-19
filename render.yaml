@@ -1,4 +1,0 @@
-databases:
-  - name: alpha-radar-db
-    databaseName: alpharadar
-    plan: free
