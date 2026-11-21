@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tradealign-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tradealign}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradealign_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-tradealign_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - tradealign_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tradealign} -d ${POSTGRES_DB:-tradealign_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: tradealign-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tradealign}:${POSTGRES_PASSWORD:-tradealign_pass}@postgres:5432/${POSTGRES_DB:-tradealign_db}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: tradealign-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tradealign}:${POSTGRES_PASSWORD:-tradealign_pass}@postgres:5432/${POSTGRES_DB:-tradealign_db}
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  tradealign_pgdata:

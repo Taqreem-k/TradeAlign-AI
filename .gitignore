@@ -1,61 +1,33 @@
-# Python-generated files
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# =========================
-# Environment & Secrets (CRITICAL)
-# =========================
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging / build artifacts
+dist/
+build/
+*.egg-info/
+
+# Environment variables & secrets (keep .env.example tracked)
 .env
 .env.*
 !.env.example
 
-# =========================
-# Python & Bytecode
-# =========================
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+# Logs & local data
+*.log
+logs/
+pgdata/
 
-# =========================
-# Virtual Environments (uv/pip)
-# =========================
-.venv/
-venv/
-env/
-ENV/
-.uv/
-
-# =========================
-# Docker & Database
-# =========================
-postgres_data/
-*.db
-*.sqlite3
-
-# =========================
-# IDEs & OS Files
-# =========================
+# IDEs & OS files
 .vscode/
 .idea/
-*.swp
-*.swo
 .DS_Store
 Thumbs.db
-
-# =========================
-# Jupyter Notebooks (Since we installed ipykernel)
-# =========================
-.ipynb_checkpoints/
-
-# =========================
-# Logs & Caches
-# =========================
-*.log
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
