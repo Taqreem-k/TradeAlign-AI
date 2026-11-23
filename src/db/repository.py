@@ -6,8 +6,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from tradealign.db.models import Announcement, MarketBrief, ProcessingStatus
-from tradealign.ingestion.schemas import BSEAnnouncement
+from src.db.models import Announcement, MarketBrief, ProcessingStatus
+from src.ingestion.schemas import BSEAnnouncement
 
 
 class TradeAlignRepository:

@@ -7,19 +7,19 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from tradealign.ai.analyzer import GeminiAnalyzer
-from tradealign.config import get_settings
-from tradealign.db.models import Announcement
-from tradealign.db.repository import TradeAlignRepository
-from tradealign.db.session import get_db_session, init_db
-from tradealign.delivery.mailer import EmailDigestService
-from tradealign.ingestion.bse_client import BSEClient
+from src.ai.analyzer import GeminiAnalyzer
+from src.config import get_settings
+from src.db.models import Announcement
+from src.db.repository import TradeAlignRepository
+from src.db.session import get_db_session, init_db
+from src.delivery.mailer import EmailDigestService
+from src.ingestion.bse_client import BSEClient
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
-logger = logging.getLogger("tradealign.worker")
+logger = logging.getLogger("src.worker")
 
 IST = ZoneInfo("Asia/Kolkata")
 MAX_CONCURRENT_ANALYSES = 3

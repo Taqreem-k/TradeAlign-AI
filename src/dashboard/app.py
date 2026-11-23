@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import joinedload
 from sqlalchemy.pool import NullPool
 
-from tradealign.config import get_settings
-from tradealign.db.models import MarketBrief
+from src.config import get_settings
+from src.db.models import MarketBrief
 
 st.set_page_config(
     page_title="TradeAlign-AI | BSE Market Intelligence",

@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 
 import aiosmtplib
 
-from tradealign.config import get_settings
-from tradealign.db.models import MarketBrief
+from src.config import get_settings
+from src.db.models import MarketBrief
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")

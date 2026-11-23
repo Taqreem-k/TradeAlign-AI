@@ -12,8 +12,8 @@ from tenacity import (
     wait_exponential,
 )
 
-from tradealign.config import get_settings
-from tradealign.ingestion.schemas import (
+from src.config import get_settings
+from src.ingestion.schemas import (
     BSE_ATTACH_HIS_BASE,
     BSE_ATTACH_LIVE_BASE,
     BSEAnnouncement,

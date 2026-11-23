@@ -12,8 +12,8 @@ from tenacity import (
     wait_exponential,
 )
 
-from tradealign.ai.schemas import MarketBriefOutput
-from tradealign.config import get_settings
+from src.ai.schemas import MarketBriefOutput
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 

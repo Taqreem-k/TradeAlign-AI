@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-from tradealign.config import get_settings
+from src.config import get_settings
 
 
 class Base(DeclarativeBase):
@@ -64,7 +64,7 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 async def init_db() -> None:
     """Create all database tables if they do not already exist."""
     # Import models here so Base.metadata registers all tables
-    from tradealign.db import models  # noqa: F401
+    from src.db import models  # noqa: F401
 
     engine = get_engine()
     async with engine.begin() as conn:

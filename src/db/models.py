@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from tradealign.db.session import Base
+from src.db.session import Base
 
 
 class ProcessingStatus(str, enum.Enum):
