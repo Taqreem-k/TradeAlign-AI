@@ -10,7 +10,8 @@ ENV UV_COMPILE_BYTECODE=1 \
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy source code and install the package
+# Copy README (required by hatchling metadata) and source code
+COPY README.md ./
 COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
