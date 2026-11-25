@@ -1,44 +1,79 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
-BSE_ATTACH_LIVE_BASE = "https://www.bseindia.com/xml-data/corpfiling/AttachLive/"
-BSE_ATTACH_HIS_BASE = "https://www.bseindia.com/xml-data/corpfiling/AttachHis/"
+def parse_nse_datetime(value: object) -> datetime:
+    """Parse NSE timestamps (IST string or RFC-2822 RSS date) into timezone-aware datetimes."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=IST)
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        for fmt in (
+            "%d-%b-%Y %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%d-%m-%Y %H:%M:%S",
+            "%d-%b-%Y",
+        ):
+            try:
+                return datetime.strptime(cleaned, fmt).replace(tzinfo=IST)
+            except ValueError:
+                continue
+
+        try:
+            dt = parsedate_to_datetime(cleaned)
+            return dt if dt.tzinfo else dt.replace(tzinfo=IST)
+        except (TypeError, ValueError):
+            pass
+
+    return datetime.now(IST)
 
 
-class BSEAnnouncement(BaseModel):
+class NSEAnnouncement(BaseModel):
+    """Unified validated schema for an NSE Corporate Announcement (JSON API or RSS)."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    news_id: str = Field(alias="NEWSID", description="Unique BSE announcement UUID.")
-    scrip_code: int = Field(alias="SCRIP_CD", description="6-digit BSE company code.")
-    company_name: str = Field(alias="SLONGNAME", description="Full registered company name.")
-    subject: str = Field(alias="NEWSSUB", description="Announcement headline/subject.")
-    category: str = Field(alias="CATEGORYNAME", default="General")
-    subcategory: Optional[str] = Field(alias="SUBCATNAME", default=None)
-    announced_at: datetime = Field(alias="NEWS_DT", description="Timestamp of filing.")
-    attachment_name: Optional[str] = Field(alias="ATTACHMENTNAME", default=None)
-    bse_url: Optional[str] = Field(alias="NSURL", default=None)
+    filing_id: str = Field(..., description="Unique filing identifier for deduplication.")
+    symbol: str = Field(..., description="NSE equity ticker symbol (e.g., RELIANCE, TCS).")
+    company_name: str = Field(..., description="Full registered company name.")
+    category: str = Field(default="General", description="NSE announcement category/type.")
+    subject: str = Field(..., description="Announcement headline or summary text.")
+    announced_at: datetime = Field(..., description="Broadcast timestamp in IST.")
+    pdf_url: Optional[str] = Field(default=None, description="Direct URL to the official NSE PDF.")
+    source: str = Field(default="nse_api", description="Ingestion source: 'nse_api' or 'nse_rss'.")
 
-    @field_validator("company_name", "subject", "category", mode="before")
+    @field_validator("symbol", mode="before")
     @classmethod
-    def strip_whitespace(cls, v: object) -> object:
-        if isinstance(v, str):
+    def normalize_symbol(cls, v: object) -> str:
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+        return "UNKNOWN"
+
+    @field_validator("company_name", "category", "subject", mode="before")
+    @classmethod
+    def strip_text(cls, v: object) -> str:
+        if isinstance(v, str) and v.strip():
             return v.strip()
-        return v
+        return "General"
 
-    @field_validator("attachment_name", "subcategory", mode="before")
+    @field_validator("announced_at", mode="before")
     @classmethod
-    def empty_string_to_none(cls, v: object) -> Optional[str]:
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v if isinstance(v, str) else None
+    def coerce_announced_at(cls, v: object) -> datetime:
+        return parse_nse_datetime(v)
 
-    @computed_field
-    @property
-    def pdf_url(self) -> Optional[str]:
-        """Constructs the primary live PDF URL if an attachment exists."""
-        if not self.attachment_name:
+    @field_validator("pdf_url", mode="before")
+    @classmethod
+    def validate_pdf_url(cls, v: object) -> Optional[str]:
+        """Keep only valid HTTP(S) PDF attachment links; ignore .xml/.zip placeholders."""
+        if not isinstance(v, str):
             return None
-        return f"{BSE_ATTACH_LIVE_BASE}{self.attachment_name}"
+        cleaned = v.strip()
+        if cleaned.startswith(("http://", "https://")) and cleaned.lower().endswith(".pdf"):
+            return cleaned
+        return None

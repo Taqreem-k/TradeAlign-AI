@@ -157,8 +157,11 @@ async def main() -> None:
     scheduler.start()
     logger.info("TradeAlign-AI scheduler started (IST timezone).")
 
-    # Run one immediate ingestion cycle on boot for instant feedback
-    await run_ingestion_and_analysis()
+   # Run one immediate ingestion cycle on boot without crashing the scheduler on transient errors
+    try:
+        await run_ingestion_and_analysis()
+    except Exception as exc:
+        logger.exception("Initial ingestion cycle failed (scheduler remains active): %s", exc)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

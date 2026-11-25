@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field(
-        default="postgresql+asyncpg://tradealign:tradealign_pass@localhost:5432/tradealign_db",
+        default="postgresql+asyncpg://tradealign:tradealign_pass@localhost:5433/tradealign_db",
         description="Async SQLAlchemy PostgreSQL connection string.",
     )
 
@@ -23,9 +23,13 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = Field(..., description="Google Gemini API key.")
     gemini_model: str = Field(default="gemini-2.5-flash", description="Gemini model ID.")
 
-    # BSE Scraper
-    bse_poll_interval_minutes: int = Field(default=15, ge=1, le=1440)
-    bse_request_timeout_seconds: int = Field(default=20, ge=5, le=120)
+    # NSE Scraper & Watchlist
+    nse_poll_interval_minutes: int = Field(default=15, ge=1, le=1440)
+    nse_request_timeout_seconds: int = Field(default=20, ge=5, le=120)
+    watchlist_symbols: str = Field(
+        default="RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK,TATAMOTORS,ZOMATO,HAL",
+        description="Comma-separated NSE ticker symbols prioritized for analysis and alerts.",
+    )
 
     # SMTP Email Delivery
     smtp_host: str = Field(default="smtp.gmail.com")
@@ -33,6 +37,15 @@ class Settings(BaseSettings):
     smtp_user: str = Field(..., description="SMTP login username/email.")
     smtp_password: SecretStr = Field(..., description="SMTP app password.")
     recipient_email: str = Field(..., description="Email address receiving the EOD digest.")
+
+    @property
+    def watchlist_set(self) -> set[str]:
+        """Return normalized uppercase NSE ticker symbols from WATCHLIST_SYMBOLS."""
+        return {
+            sym.strip().upper()
+            for sym in self.watchlist_symbols.split(",")
+            if sym.strip()
+        }
 
 
 @lru_cache

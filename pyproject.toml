@@ -5,7 +5,7 @@ description = "Automated Indian market (BSE) corporate announcement ingestion an
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "httpx>=0.28.1",
+    "curl-cffi>=0.10.0",
     "tenacity>=9.0.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
