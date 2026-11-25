@@ -79,7 +79,7 @@ async def _process_single_announcement(
         return True
 
     except genai_errors.APIError as exc:
-        if exc.code == 429:
+        if exc.code in (429, 503):
             logger.warning(
                 "Gemini 429 quota hit on [%s]; leaving status as PENDING for next cycle.",
                 announcement.symbol,

@@ -4,18 +4,18 @@ from typing import Optional
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
-from tenacity import (
-    before_sleep_log,
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from src.ai.schemas import MarketBriefOutput
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+FALLBACK_MODELS = [
+    "gemini-4-hydrogen",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+]
 
 SYSTEM_INSTRUCTION = """You are a Senior Indian Equity Research Analyst specializing in NSE/BSE corporate filings.
 Analyze the attached corporate filing PDF and produce a concise, factual market brief.
@@ -28,32 +28,19 @@ STRICT RULES:
 """
 
 
-def _is_retryable_gemini_error(exc: BaseException) -> bool:
-    """Retry transient per-minute 429s or 5xx errors; fail fast on 400s and daily quota caps."""
-    if not isinstance(exc, genai_errors.APIError):
-        return False
-    if exc.code == 429 and "PerDay" in str(exc):
-        return False
-    return exc.code in (429, 500, 502, 503, 504)
-
 class GeminiAnalyzer:
-    """Async multimodal PDF analyzer powered by the Google GenAI SDK."""
+    """Async multimodal PDF analyzer with automatic multi-model failover."""
 
     def __init__(self, model: Optional[str] = None) -> None:
         settings = get_settings()
-        self._model = model or settings.gemini_model
+        primary = model or settings.gemini_model
+        # Deduplicated chain: configured model first, then Free Tier fallbacks
+        self._models = list(dict.fromkeys([primary, *FALLBACK_MODELS]))
         self._client = genai.Client(
             api_key=settings.gemini_api_key.get_secret_value(),
             http_options=types.HttpOptions(api_version="v1beta"),
         )
 
-    @retry(
-        retry=retry_if_exception(_is_retryable_gemini_error),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=15, min=20, max=65),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
     async def analyze_filing(
         self,
         symbol: str,
@@ -64,6 +51,7 @@ class GeminiAnalyzer:
     ) -> MarketBriefOutput:
         """
         Send raw PDF bytes to Gemini and return a strictly validated MarketBriefOutput.
+        Automatically fails over to the next model on 404 (retired), 429 (quota), or 503 (busy).
         """
         user_prompt = (
             f"NSE Symbol: {symbol}\n"
@@ -73,21 +61,39 @@ class GeminiAnalyzer:
             "Analyze the attached PDF filing and generate the structured market brief."
         )
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=[
-                types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-                user_prompt,
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=MarketBriefOutput,
-                temperature=0.1,
-            ),
-        )
+        last_exc: Optional[Exception] = None
+        for model_name in self._models:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+                        user_prompt,
+                    ],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        response_mime_type="application/json",
+                        response_schema=MarketBriefOutput,
+                        temperature=0.1,
+                    ),
+                )
 
-        if not response.text:
-            raise ValueError(f"Gemini returned an empty response for {symbol} ({subject}).")
+                if not response.text:
+                    raise ValueError(f"Gemini ({model_name}) returned an empty response for {symbol}.")
 
-        return MarketBriefOutput.model_validate_json(response.text)
+                return MarketBriefOutput.model_validate_json(response.text)
+
+            except genai_errors.APIError as exc:
+                last_exc = exc
+                if exc.code in (404, 429, 500, 502, 503, 504):
+                    logger.warning(
+                        "Model %s unavailable (HTTP %s) for [%s]; trying next fallback model.",
+                        model_name,
+                        exc.code,
+                        symbol,
+                    )
+                    continue
+                raise
+
+        assert last_exc is not None
+        raise last_exc
