@@ -1,24 +1,28 @@
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Optional, Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import contains_eager
 
 from src.db.models import Announcement, MarketBrief, ProcessingStatus
-from src.ingestion.schemas import BSEAnnouncement
+from src.ingestion.schemas import NSEAnnouncement
 
 
 class TradeAlignRepository:
-    """Data access layer for BSE announcements and AI-generated market briefs."""
+    """Data access layer for NSE announcements and AI-generated market briefs."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def upsert_announcements(self, items: Sequence[BSEAnnouncement]) -> int:
+    async def upsert_announcements(
+        self,
+        items: Sequence[NSEAnnouncement],
+        watchlist: Optional[set[str]] = None,
+    ) -> int:
         """
-        Bulk-insert BSE announcements while ignoring duplicates via PostgreSQL ON CONFLICT.
+        Bulk-insert NSE announcements while ignoring duplicates via PostgreSQL ON CONFLICT.
 
         Returns:
             The number of newly inserted rows.
@@ -26,21 +30,21 @@ class TradeAlignRepository:
         if not items:
             return 0
 
+        watchlist_symbols = watchlist or set()
         rows = [
             {
-                "news_id": item.news_id,
-                "scrip_code": item.scrip_code,
+                "filing_id": item.filing_id,
+                "symbol": item.symbol,
                 "company_name": item.company_name,
-                "subject": item.subject,
                 "category": item.category,
-                "subcategory": item.subcategory,
+                "subject": item.subject,
                 "announced_at": item.announced_at,
-                "attachment_name": item.attachment_name,
                 "pdf_url": item.pdf_url,
-                "bse_url": item.bse_url,
+                "source": item.source,
+                "is_watchlist": item.symbol in watchlist_symbols,
                 "status": (
                     ProcessingStatus.PENDING
-                    if item.attachment_name
+                    if item.pdf_url
                     else ProcessingStatus.SKIPPED
                 ),
             }
@@ -50,18 +54,21 @@ class TradeAlignRepository:
         stmt = (
             pg_insert(Announcement)
             .values(rows)
-            .on_conflict_do_nothing(index_elements=["news_id"])
+            .on_conflict_do_nothing(index_elements=["filing_id"])
             .returning(Announcement.id)
         )
         result = await self.session.execute(stmt)
         return len(result.scalars().all())
 
-    async def get_pending_announcements(self, limit: int = 20) -> list[Announcement]:
-        """Fetch unprocessed announcements that have a PDF attachment, newest first."""
+    async def get_pending_announcements(self, limit: int = 10) -> list[Announcement]:
+        """
+        Fetch unprocessed announcements with PDFs.
+        Prioritizes Watchlist stocks first, then newest market-wide filings.
+        """
         stmt = (
             select(Announcement)
             .where(Announcement.status == ProcessingStatus.PENDING)
-            .order_by(Announcement.announced_at.desc())
+            .order_by(Announcement.is_watchlist.desc(), Announcement.announced_at.desc())
             .limit(limit)
         )
         result = await self.session.execute(stmt)
@@ -104,16 +111,27 @@ class TradeAlignRepository:
             .values(status=ProcessingStatus.FAILED, error_message=error[:1000])
         )
 
-    async def get_unemailed_briefs(self, min_impact_score: int = 1) -> list[MarketBrief]:
-        """Fetch all processed briefs that have not yet been sent in an EOD email digest."""
+    async def get_unemailed_briefs(self, min_impact_score: int = 6) -> list[MarketBrief]:
+        """
+        Fetch all unemailed briefs that either belong to the user's Watchlist
+        OR meet the high-impact market threshold.
+        """
         stmt = (
             select(MarketBrief)
-            .options(joinedload(MarketBrief.announcement))
+            .join(MarketBrief.announcement)
+            .options(contains_eager(MarketBrief.announcement))
             .where(
                 MarketBrief.emailed_at.is_(None),
-                MarketBrief.impact_score >= min_impact_score,
+                or_(
+                    Announcement.is_watchlist.is_(True),
+                    MarketBrief.impact_score >= min_impact_score,
+                ),
             )
-            .order_by(MarketBrief.impact_score.desc(), MarketBrief.created_at.desc())
+            .order_by(
+                Announcement.is_watchlist.desc(),
+                MarketBrief.impact_score.desc(),
+                MarketBrief.created_at.desc(),
+            )
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

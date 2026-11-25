@@ -1,11 +1,11 @@
 import asyncio
 import logging
 import signal
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from google.genai import errors as genai_errors
 
 from src.ai.analyzer import GeminiAnalyzer
 from src.config import get_settings
@@ -13,102 +13,139 @@ from src.db.models import Announcement
 from src.db.repository import TradeAlignRepository
 from src.db.session import get_db_session, init_db
 from src.delivery.mailer import EmailDigestService
-from src.ingestion.bse_client import BSEClient
+from src.ingestion.nse_client import NSEClient
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
-logger = logging.getLogger("src.worker")
+logger = logging.getLogger("tradealign.worker")
 
-IST = ZoneInfo("Asia/Kolkata")
-MAX_CONCURRENT_ANALYSES = 3
-BATCH_SIZE = 10
+try:
+    from zoneinfo import ZoneInfo
+
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:
+    IST = timezone(timedelta(hours=5, minutes=30))
+
+BATCH_SIZE = 5
+GEMINI_PACE_SECONDS = 13.0  # Keeps throughput <= 4.6 RPM (safely under Free Tier 5 RPM cap)
 MIN_DIGEST_IMPACT_SCORE = 6
 
 
 async def _process_single_announcement(
-    semaphore: asyncio.Semaphore,
-    bse_client: BSEClient,
+    nse_client: NSEClient,
     analyzer: GeminiAnalyzer,
     announcement: Announcement,
-) -> None:
-    """Download PDF, run Gemini analysis, and persist the result for one filing."""
-    async with semaphore:
-        try:
-            if not announcement.attachment_name:
-                return
+) -> bool:
+    """
+    Download PDF, run Gemini analysis, and persist the result for one filing.
+    Returns False if a 429 quota limit was hit (signaling the batch to pause).
+    """
+    try:
+        if not announcement.pdf_url:
+            return True
 
-            pdf_bytes = await bse_client.download_pdf(announcement.attachment_name)
-            brief_output = await analyzer.analyze_filing(
-                company_name=announcement.company_name,
-                subject=announcement.subject,
-                category=announcement.category,
-                pdf_bytes=pdf_bytes,
+        pdf_bytes = await nse_client.download_pdf(announcement.pdf_url)
+        brief_output = await analyzer.analyze_filing(
+            symbol=announcement.symbol,
+            company_name=announcement.company_name,
+            subject=announcement.subject,
+            category=announcement.category,
+            pdf_bytes=pdf_bytes,
+        )
+
+        async with get_db_session() as session:
+            repo = TradeAlignRepository(session)
+            await repo.save_market_brief(
+                announcement_id=announcement.id,
+                headline=brief_output.headline,
+                sentiment=brief_output.sentiment.value,
+                impact_score=brief_output.impact_score,
+                key_takeaways=brief_output.key_takeaways,
+                financial_metrics=brief_output.financial_metrics.model_dump(exclude_none=True),
+                raw_summary=brief_output.raw_summary,
             )
 
-            async with get_db_session() as session:
-                repo = TradeAlignRepository(session)
-                await repo.save_market_brief(
-                    announcement_id=announcement.id,
-                    headline=brief_output.headline,
-                    sentiment=brief_output.sentiment.value,
-                    impact_score=brief_output.impact_score,
-                    key_takeaways=brief_output.key_takeaways,
-                    financial_metrics=brief_output.financial_metrics.model_dump(exclude_none=True),
-                    raw_summary=brief_output.raw_summary,
-                )
+        tag = "[WATCHLIST] " if announcement.is_watchlist else ""
+        logger.info(
+            "Processed %s[%s] %s (Impact: %d/10, Sentiment: %s)",
+            tag,
+            announcement.symbol,
+            announcement.company_name,
+            brief_output.impact_score,
+            brief_output.sentiment.value,
+        )
+        return True
 
-            logger.info(
-                "Processed [%s] %s (Impact: %d/10, Sentiment: %s)",
-                announcement.scrip_code,
-                announcement.company_name,
-                brief_output.impact_score,
-                brief_output.sentiment.value,
+    except genai_errors.APIError as exc:
+        if exc.code == 429:
+            logger.warning(
+                "Gemini 429 quota hit on [%s]; leaving status as PENDING for next cycle.",
+                announcement.symbol,
             )
-        except Exception as exc:
-            logger.exception("Failed processing announcement id=%d: %s", announcement.id, exc)
-            async with get_db_session() as session:
-                repo = TradeAlignRepository(session)
-                await repo.mark_announcement_failed(announcement.id, str(exc))
+            return False
+        logger.exception("Gemini API error on announcement id=%d: %s", announcement.id, exc)
+        async with get_db_session() as session:
+            repo = TradeAlignRepository(session)
+            await repo.mark_announcement_failed(announcement.id, str(exc))
+        return True
+
+    except Exception as exc:
+        logger.exception("Failed processing announcement id=%d: %s", announcement.id, exc)
+        async with get_db_session() as session:
+            repo = TradeAlignRepository(session)
+            await repo.mark_announcement_failed(announcement.id, str(exc))
+        return True
 
 
 async def run_ingestion_and_analysis() -> None:
-    """Scheduled job: scrape today's BSE announcements and analyze pending PDFs."""
+    """Scheduled job: scrape recent NSE announcements and analyze prioritized PDFs."""
+    settings = get_settings()
     today_ist = datetime.now(IST).date()
-    logger.info("Starting BSE ingestion cycle for %s...", today_ist)
+    from_date = today_ist - timedelta(days=1)
+    watchlist = settings.watchlist_set
+
+    logger.info(
+        "Starting NSE ingestion cycle (%s to %s) | Watchlist: %d stocks...",
+        from_date,
+        today_ist,
+        len(watchlist),
+    )
 
     analyzer = GeminiAnalyzer()
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_ANALYSES)
 
-    async with BSEClient() as bse_client:
-        announcements = await bse_client.fetch_announcements(
-            from_date=today_ist,
+    async with NSEClient() as nse_client:
+        announcements = await nse_client.fetch_announcements(
+            from_date=from_date,
             to_date=today_ist,
         )
 
         async with get_db_session() as session:
             repo = TradeAlignRepository(session)
-            inserted_count = await repo.upsert_announcements(announcements)
+            inserted_count = await repo.upsert_announcements(announcements, watchlist=watchlist)
             pending = await repo.get_pending_announcements(limit=BATCH_SIZE)
 
+        watchlist_pending = sum(1 for a in pending if a.is_watchlist)
         logger.info(
-            "Fetched %d announcements (%d new). Processing %d pending filings.",
+            "Fetched %d NSE filings (%d new). Processing %d pending (%d watchlist).",
             len(announcements),
             inserted_count,
             len(pending),
+            watchlist_pending,
         )
 
-        if pending:
-            tasks = [
-                _process_single_announcement(semaphore, bse_client, analyzer, ann)
-                for ann in pending
-            ]
-            await asyncio.gather(*tasks)
+        for idx, ann in enumerate(pending):
+            ok = await _process_single_announcement(nse_client, analyzer, ann)
+            if not ok:
+                logger.warning("Stopping batch early due to Gemini rate limit.")
+                break
+            if idx < len(pending) - 1:
+                await asyncio.sleep(GEMINI_PACE_SECONDS)
 
 
 async def run_eod_digest() -> None:
-    """Scheduled job: compile and email all unemailed high-impact briefs."""
+    """Scheduled job: compile and email all unemailed Watchlist & high-impact briefs."""
     logger.info("Running EOD email digest job...")
     mailer = EmailDigestService()
 
@@ -116,7 +153,7 @@ async def run_eod_digest() -> None:
         repo = TradeAlignRepository(session)
         briefs = await repo.get_unemailed_briefs(min_impact_score=MIN_DIGEST_IMPACT_SCORE)
         if not briefs:
-            logger.info("No high-impact briefs queued for EOD digest.")
+            logger.info("No Watchlist or high-impact briefs queued for EOD digest.")
             return
 
         sent = await mailer.send_digest(briefs)
@@ -131,21 +168,19 @@ async def main() -> None:
 
     scheduler = AsyncIOScheduler(timezone=IST)
 
-    # Poll BSE every N minutes during Indian market & post-market hours (Mon-Fri, 09:00-17:00 IST)
     scheduler.add_job(
         run_ingestion_and_analysis,
         trigger=CronTrigger(
             day_of_week="mon-fri",
             hour="9-17",
-            minute=f"*/{settings.bse_poll_interval_minutes}",
+            minute=f"*/{settings.nse_poll_interval_minutes}",
             timezone=IST,
         ),
-        id="bse_ingestion_job",
+        id="nse_ingestion_job",
         max_instances=1,
         coalesce=True,
     )
 
-    # Dispatch End-of-Day HTML Digest at 5:15 PM IST (Mon-Fri)
     scheduler.add_job(
         run_eod_digest,
         trigger=CronTrigger(day_of_week="mon-fri", hour=17, minute=15, timezone=IST),
@@ -157,7 +192,6 @@ async def main() -> None:
     scheduler.start()
     logger.info("TradeAlign-AI scheduler started (IST timezone).")
 
-   # Run one immediate ingestion cycle on boot without crashing the scheduler on transient errors
     try:
         await run_ingestion_and_analysis()
     except Exception as exc:
@@ -169,7 +203,6 @@ async def main() -> None:
         try:
             loop.add_signal_handler(sig, stop_event.set)
         except NotImplementedError:
-            # Windows ProactorEventLoop does not support add_signal_handler
             pass
 
     try:

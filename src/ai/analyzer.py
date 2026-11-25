@@ -7,7 +7,7 @@ from google.genai import types
 from tenacity import (
     before_sleep_log,
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -17,7 +17,7 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_INSTRUCTION = """You are a Senior Indian Equity Research Analyst specializing in BSE/NSE corporate filings.
+SYSTEM_INSTRUCTION = """You are a Senior Indian Equity Research Analyst specializing in NSE/BSE corporate filings.
 Analyze the attached corporate filing PDF and produce a concise, factual market brief.
 
 STRICT RULES:
@@ -28,23 +28,35 @@ STRICT RULES:
 """
 
 
+def _is_retryable_gemini_error(exc: BaseException) -> bool:
+    """Retry transient per-minute 429s or 5xx errors; fail fast on 400s and daily quota caps."""
+    if not isinstance(exc, genai_errors.APIError):
+        return False
+    if exc.code == 429 and "PerDay" in str(exc):
+        return False
+    return exc.code in (429, 500, 502, 503, 504)
+
 class GeminiAnalyzer:
     """Async multimodal PDF analyzer powered by the Google GenAI SDK."""
 
     def __init__(self, model: Optional[str] = None) -> None:
         settings = get_settings()
         self._model = model or settings.gemini_model
-        self._client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+        self._client = genai.Client(
+            api_key=settings.gemini_api_key.get_secret_value(),
+            http_options=types.HttpOptions(api_version="v1beta"),
+        )
 
     @retry(
-        retry=retry_if_exception_type(genai_errors.APIError),
+        retry=retry_if_exception(_is_retryable_gemini_error),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=2, min=4, max=30),
+        wait=wait_exponential(multiplier=15, min=20, max=65),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
     async def analyze_filing(
         self,
+        symbol: str,
         company_name: str,
         subject: str,
         category: str,
@@ -54,8 +66,9 @@ class GeminiAnalyzer:
         Send raw PDF bytes to Gemini and return a strictly validated MarketBriefOutput.
         """
         user_prompt = (
+            f"NSE Symbol: {symbol}\n"
             f"Company: {company_name}\n"
-            f"BSE Category: {category}\n"
+            f"NSE Category: {category}\n"
             f"Filing Subject: {subject}\n\n"
             "Analyze the attached PDF filing and generate the structured market brief."
         )
@@ -75,6 +88,6 @@ class GeminiAnalyzer:
         )
 
         if not response.text:
-            raise ValueError(f"Gemini returned an empty response for {company_name} ({subject}).")
+            raise ValueError(f"Gemini returned an empty response for {symbol} ({subject}).")
 
         return MarketBriefOutput.model_validate_json(response.text)
