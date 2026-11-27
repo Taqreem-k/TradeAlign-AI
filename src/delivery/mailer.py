@@ -5,6 +5,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Sequence
 
+import httpx2
 import aiosmtplib
 
 from src.config import get_settings
@@ -124,6 +125,25 @@ class EmailDigestService:
         </html>
         """
 
+    async def _send_via_resend(self, subject: str, html_body: str) -> None:
+        """Send HTML digest over HTTPS (port 443) via Resend REST API."""
+        api_key = self._settings.resend_api_key.get_secret_value().strip()
+        async with httpx2.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": self._settings.email_from,
+                    "to": [self._settings.recipient_email.strip()],
+                    "subject": subject,
+                    "html": html_body,
+                },
+            )
+            response.raise_for_status()
+
     async def send_digest(self, briefs: Sequence[MarketBrief]) -> bool:
         """Send an HTML email containing all provided market briefs."""
         if not briefs:
@@ -133,29 +153,38 @@ class EmailDigestService:
         report_date = datetime.now(IST).strftime("%d %b %Y")
         watchlist_count = sum(1 for b in briefs if b.announcement.is_watchlist)
         subject_prefix = f"{watchlist_count} Watchlist + " if watchlist_count else ""
-
-        message = MIMEMultipart("alternative")
-        message["Subject"] = (
+        subject = (
             f"TradeAlign-AI NSE Brief ({report_date}) — {subject_prefix}{len(briefs)} Filings"
         )
-        message["From"] = self._settings.smtp_user
-        message["To"] = self._settings.recipient_email
-
         html_body = self._render_html(briefs, report_date)
-        message.attach(MIMEText(html_body, "html", "utf-8"))
 
-        await aiosmtplib.send(
-            message,
-            hostname=self._settings.smtp_host,
-            port=self._settings.smtp_port,
-            start_tls=True,
-            username=self._settings.smtp_user,
-            password=self._settings.smtp_password.get_secret_value(),
-        )
+        if self._settings.resend_api_key and self._settings.resend_api_key.get_secret_value().strip():
+            await self._send_via_resend(subject, html_body)
+            transport = "Resend HTTPS API"
+        else:
+            message = MIMEMultipart("alternative")
+            message["Subject"] = subject
+            message["From"] = self._settings.smtp_user
+            message["To"] = self._settings.recipient_email
+            message.attach(MIMEText(html_body, "html", "utf-8"))
+
+            use_ssl = self._settings.smtp_port == 465
+            await aiosmtplib.send(
+                message,
+                hostname=self._settings.smtp_host,
+                port=self._settings.smtp_port,
+                use_tls=use_ssl,
+                start_tls=not use_ssl,
+                username=self._settings.smtp_user.strip(),
+                password=self._settings.smtp_password.get_secret_value().replace(" ", "").strip(),
+            )
+            transport = f"SMTP ({self._settings.smtp_host}:{self._settings.smtp_port})"
+
         logger.info(
-            "Sent EOD digest with %d briefs (%d watchlist) to %s.",
+            "Sent EOD digest with %d briefs (%d watchlist) to %s via %s.",
             len(briefs),
             watchlist_count,
             self._settings.recipient_email,
+            transport,
         )
         return True

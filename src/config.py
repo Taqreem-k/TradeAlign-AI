@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -31,11 +32,19 @@ class Settings(BaseSettings):
         description="Comma-separated NSE ticker symbols prioritized for analysis and alerts.",
     )
 
-    # SMTP Email Delivery
+    # Email Delivery (Primary: Resend HTTPS API | Fallback: Async SMTP)
+    resend_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description="Resend API key for HTTPS email delivery (bypasses blocked SMTP ports).",
+    )
+    email_from: str = Field(
+        default="TradeAlign-AI <onboarding@resend.dev>",
+        description="Sender header for Resend HTTP delivery.",
+    )
     smtp_host: str = Field(default="smtp.gmail.com")
-    smtp_port: int = Field(default=587)
-    smtp_user: str = Field(..., description="SMTP login username/email.")
-    smtp_password: SecretStr = Field(..., description="SMTP app password.")
+    smtp_port: int = Field(default=465)
+    smtp_user: str = Field(default="", description="SMTP login username/email.")
+    smtp_password: SecretStr = Field(default=SecretStr(""), description="SMTP app password.")
     recipient_email: str = Field(..., description="Email address receiving the EOD digest.")
 
     @property
